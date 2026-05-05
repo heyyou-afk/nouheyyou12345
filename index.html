@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NOU! Ultimate Edition V2.0</title>
+    <title>NOU! Ultimate Edition V2.0 - Full Game</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -21,25 +21,32 @@
             background-color: #05070a; 
             margin: 0; 
             color: white; 
-            overflow-x: hidden; 
+            overflow: hidden; 
+            height: 100vh;
         }
         .glass { 
             background: rgba(15, 18, 26, 0.8); 
-            backdrop-filter: blur(16px); 
+            backdrop-filter: blur(20px); 
             border: 1px solid rgba(255, 255, 255, 0.08); 
-        }
-        .btn-blue {
-            background: #3b82f6;
-            box-shadow: 0 4px 14px 0 rgba(59, 130, 246, 0.39);
-        }
-        .btn-purple {
-            background: linear-gradient(135deg, #a855f7 0%, #7c3aed 100%);
-            box-shadow: 0 4px 14px 0 rgba(168, 85, 247, 0.3);
         }
         .gradient-text { 
             background: linear-gradient(to right, #f97316, #fbbf24, #3b82f6); 
             -webkit-background-clip: text; 
             color: transparent; 
+        }
+        .card-red { background: linear-gradient(135deg, #ef4444, #991b1b); }
+        .card-blue { background: linear-gradient(135deg, #3b82f6, #1e40af); }
+        .card-green { background: linear-gradient(135deg, #22c55e, #166534); }
+        .card-yellow { background: linear-gradient(135deg, #eab308, #854d0e); }
+        .card-black { background: linear-gradient(135deg, #1f2937, #000000); }
+        
+        .card-hover:hover {
+            transform: translateY(-20px) scale(1.05);
+            z-index: 50;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+        }
+        .turn-indicator {
+            box-shadow: 0 0 20px rgba(59, 130, 246, 0.5);
         }
     </style>
 </head>
@@ -47,9 +54,8 @@
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect } = React;
+        const { useState, useEffect, useMemo } = React;
 
-        // --- 已寫入截圖 182644.png 中的配置 ---
         const firebaseConfig = {
             apiKey: "AIzaSyCKXqz3brBdTB0eKumon3D_nymr_cUKg_M",
             authDomain: "heyyou-5e8a2.firebaseapp.com",
@@ -60,75 +66,245 @@
             measurementId: "G-4FRPL7XBXC"
         };
 
-        // 初始化 Firebase
-        if (!firebase.apps.length) {
-            firebase.initializeApp(firebaseConfig);
-        }
+        if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
         const db = firebase.firestore();
         const auth = firebase.auth();
 
+        // 遊戲卡牌常數
+        const COLORS = ['red', 'blue', 'green', 'yellow'];
+        const VALUES = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'SKIP', 'REVERSE', 'DRAW_TWO'];
+        const SPECIALS = ['WILD', 'WILD_DRAW_FOUR'];
+
+        function generateDeck() {
+            let deck = [];
+            COLORS.forEach(color => {
+                VALUES.forEach(val => {
+                    deck.push({ color, value: val, id: Math.random().toString(36) });
+                    if (val !== '0') deck.push({ color, value: val, id: Math.random().toString(36) });
+                });
+            });
+            for(let i=0; i<4; i++) {
+                SPECIALS.forEach(val => deck.push({ color: 'black', value: val, id: Math.random().toString(36) }));
+            }
+            return deck.sort(() => Math.random() - 0.5);
+        }
+
         function App() {
+            const [user, setUser] = useState(null);
             const [playerName, setPlayerName] = useState('7777');
             const [rooms, setRooms] = useState([]);
             const [currentRoom, setCurrentRoom] = useState(null);
-            const [user, setUser] = useState(null);
-            const [loading, setLoading] = useState(true);
+            const [gameState, setGameState] = useState(null);
 
             // 認證
             useEffect(() => {
-                auth.signInAnonymously().then(res => setUser(res.user));
+                auth.onAuthStateChanged(u => {
+                    if (u) setUser(u);
+                    else auth.signInAnonymously();
+                });
             }, []);
 
-            // 監聽房間列表
+            // 監聽房間
             useEffect(() => {
                 if (!user) return;
-                const unsubscribe = db.collection('nou_rooms')
-                    .orderBy('createdAt', 'desc')
-                    .limit(10)
-                    .onSnapshot(snapshot => {
-                        setRooms(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-                        setLoading(false);
-                    });
-                return () => unsubscribe();
+                return db.collection('nou_rooms').orderBy('createdAt', 'desc').limit(10).onSnapshot(snap => {
+                    setRooms(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+                });
             }, [user]);
 
+            // 監聽目前房間/遊戲狀態
+            useEffect(() => {
+                if (!currentRoom) {
+                    setGameState(null);
+                    return;
+                }
+                return db.collection('nou_rooms').doc(currentRoom.id).onSnapshot(doc => {
+                    if (doc.exists()) {
+                        const data = doc.data();
+                        setCurrentRoom({ id: doc.id, ...data });
+                        if (data.status === 'PLAYING') {
+                            setGameState(data.gameState);
+                        }
+                    } else {
+                        setCurrentRoom(null);
+                    }
+                });
+            }, [currentRoom?.id]);
+
             const createRoom = async () => {
-                const roomName = prompt("房間名稱:", `${playerName} 的遊戲`);
-                if (!roomName) return;
-                const newRoom = {
-                    name: roomName,
-                    host: playerName,
-                    players: [{ id: user.uid, name: playerName }],
-                    createdAt: firebase.firestore.FieldValue.serverTimestamp()
-                };
-                const doc = await db.collection('nou_rooms').add(newRoom);
-                setCurrentRoom({ id: doc.id, ...newRoom });
+                const name = prompt("房間名稱:", `${playerName} 的遊戲`);
+                if (!name) return;
+                const doc = await db.collection('nou_rooms').add({
+                    name, host: user.uid, players: [{ id: user.uid, name: playerName }],
+                    status: 'LOBBY', createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                });
+                setCurrentRoom({ id: doc.id });
             };
 
             const joinRoom = async (room) => {
                 if (room.players.length >= 4) return alert("房間已滿");
-                const updatedPlayers = [...room.players, { id: user.uid, name: playerName }];
-                await db.collection('nou_rooms').doc(room.id).update({ players: updatedPlayers });
-                setCurrentRoom({ ...room, players: updatedPlayers });
+                const players = [...room.players, { id: user.uid, name: playerName }];
+                await db.collection('nou_rooms').doc(room.id).update({ players });
+                setCurrentRoom(room);
             };
 
+            const startGame = async () => {
+                if (currentRoom.players.length < 2) return alert("至少需要2人");
+                let deck = generateDeck();
+                const playerHands = {};
+                currentRoom.players.forEach(p => {
+                    playerHands[p.id] = deck.splice(0, 7);
+                });
+                const topCard = deck.pop();
+
+                await db.collection('nou_rooms').doc(currentRoom.id).update({
+                    status: 'PLAYING',
+                    gameState: {
+                        deck, playerHands, topCard,
+                        turnIndex: 0,
+                        direction: 1, // 1 或 -1
+                        lastUpdate: Date.now()
+                    }
+                });
+            };
+
+            const playCard = async (cardIndex) => {
+                const myId = user.uid;
+                if (currentRoom.players[gameState.turnIndex].id !== myId) return;
+
+                const myHand = [...gameState.playerHands[myId]];
+                const card = myHand[cardIndex];
+                const top = gameState.topCard;
+
+                // 判定是否可出
+                const canPlay = card.color === 'black' || card.color === top.color || card.value === top.value;
+                if (!canPlay) return;
+
+                myHand.splice(cardIndex, 1);
+                
+                // 處理特殊牌邏輯 (簡化版)
+                let nextTurn = (gameState.turnIndex + gameState.direction + currentRoom.players.length) % currentRoom.players.length;
+                if (card.value === 'SKIP') nextTurn = (nextTurn + gameState.direction + currentRoom.players.length) % currentRoom.players.length;
+                
+                const newGameState = {
+                    ...gameState,
+                    topCard: card,
+                    playerHands: { ...gameState.playerHands, [myId]: myHand },
+                    turnIndex: nextTurn,
+                    lastUpdate: Date.now()
+                };
+
+                if (myHand.length === 0) {
+                    alert("你贏了！");
+                    await db.collection('nou_rooms').doc(currentRoom.id).update({ status: 'LOBBY', gameState: null });
+                } else {
+                    await db.collection('nou_rooms').doc(currentRoom.id).update({ gameState: newGameState });
+                }
+            };
+
+            const drawCard = async () => {
+                const myId = user.uid;
+                if (currentRoom.players[gameState.turnIndex].id !== myId) return;
+
+                const deck = [...gameState.deck];
+                const newCard = deck.pop();
+                const myHand = [...gameState.playerHands[myId], newCard];
+
+                await db.collection('nou_rooms').doc(currentRoom.id).update({
+                    'gameState.deck': deck,
+                    [`gameState.playerHands.${myId}`]: myHand,
+                    'gameState.turnIndex': (gameState.turnIndex + gameState.direction + currentRoom.players.length) % currentRoom.players.length
+                });
+            };
+
+            // 遊戲中畫面
+            if (gameState) {
+                const myId = user.uid;
+                const isMyTurn = currentRoom.players[gameState.turnIndex].id === myId;
+                const myHand = gameState.playerHands[myId] || [];
+
+                return (
+                    <div className="h-screen w-full relative flex flex-col justify-between p-4 bg-[#0a0f1a] overflow-hidden">
+                        {/* 對手區域 */}
+                        <div className="flex justify-center gap-10 mt-4">
+                            {currentRoom.players.filter(p => p.id !== myId).map(p => (
+                                <div key={p.id} className="text-center">
+                                    <div className={`p-1 rounded-xl mb-1 ${currentRoom.players[gameState.turnIndex].id === p.id ? 'turn-indicator bg-blue-500' : 'bg-white/10'}`}>
+                                        <div className="bg-[#05070a] px-4 py-2 rounded-lg">
+                                            <div className="text-xs font-bold truncate w-24">{p.name}</div>
+                                            <div className="text-[10px] opacity-50">Cards: {gameState.playerHands[p.id]?.length}</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+
+                        {/* 中央桌面 */}
+                        <div className="flex flex-col items-center justify-center gap-8">
+                            <div className="flex items-center gap-12">
+                                {/* 牌堆 */}
+                                <div onClick={drawCard} className="w-24 h-36 bg-gray-900 border-2 border-white/20 rounded-2xl flex items-center justify-center cursor-pointer hover:border-blue-500 transition-all">
+                                    <div className="text-2xl font-black italic text-white/20">NOU!</div>
+                                </div>
+                                {/* 棄牌堆 (Top Card) */}
+                                <div className={`w-28 h-40 rounded-2xl card-${gameState.topCard.color} shadow-2xl flex flex-col items-center justify-between p-4 border-2 border-white/30 transform rotate-3`}>
+                                    <span className="self-start text-lg font-black">{gameState.topCard.value}</span>
+                                    <span className="text-4xl font-black">{gameState.topCard.value[0]}</span>
+                                    <span className="self-end text-lg font-black rotate-180">{gameState.topCard.value}</span>
+                                </div>
+                            </div>
+                            <div className="text-xs font-bold tracking-widest text-blue-400 animate-pulse">
+                                {isMyTurn ? "輪到你了！請出牌或抽牌" : `等待 ${currentRoom.players[gameState.turnIndex].name} 出牌...`}
+                            </div>
+                        </div>
+
+                        {/* 我的手牌 */}
+                        <div className="w-full flex flex-col items-center mb-4">
+                            <div className="flex flex-wrap justify-center gap-2 max-w-5xl">
+                                {myHand.map((card, i) => (
+                                    <div 
+                                        key={card.id}
+                                        onClick={() => playCard(i)}
+                                        className={`w-20 h-32 rounded-xl card-${card.color} card-hover transition-all cursor-pointer flex flex-col items-center justify-between p-2 border border-white/20 -ml-4 first:ml-0 shadow-lg`}
+                                    >
+                                        <span className="self-start text-xs font-black">{card.value}</span>
+                                        <span className="text-2xl font-black italic">{card.value[0]}</span>
+                                        <span className="self-end text-xs font-black rotate-180">{card.value}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+
+            // 大廳/等待畫面 (承襲上一次的 UI)
             if (currentRoom) {
                 return (
                     <div className="min-h-screen flex items-center justify-center bg-[#05070a] p-6">
                         <div className="glass p-10 rounded-[40px] w-full max-w-lg text-center">
-                            <h2 className="text-3xl font-black mb-6 italic">{currentRoom.name}</h2>
+                            <h2 className="text-3xl font-black mb-6 italic gradient-text">{currentRoom.name}</h2>
                             <div className="space-y-3 mb-10 text-left">
                                 {currentRoom.players.map((p, i) => (
                                     <div key={i} className="bg-white/5 p-4 rounded-2xl flex justify-between items-center border border-white/5">
                                         <span className="font-bold">{p.name}</span>
                                         <span className="text-[10px] uppercase tracking-tighter opacity-50 px-3 py-1 bg-white/10 rounded-full">
-                                            {i === 0 ? 'HOST' : `PLAYER ${i+1}`}
+                                            {p.id === currentRoom.host ? 'HOST' : `PLAYER`}
                                         </span>
                                     </div>
                                 ))}
                             </div>
-                            <button onClick={() => setCurrentRoom(null)} className="text-gray-500 hover:text-white transition-colors text-sm font-bold uppercase tracking-widest">
-                                離開房間
+                            
+                            {user.uid === currentRoom.host ? (
+                                <button onClick={startGame} className="w-full bg-blue-600 hover:bg-blue-500 py-4 rounded-2xl font-black italic tracking-widest transition-all mb-4 shadow-xl shadow-blue-900/20">
+                                    開始遊戲
+                                </button>
+                            ) : (
+                                <div className="text-gray-500 mb-6 italic animate-pulse">等待房主開始遊戲...</div>
+                            )}
+
+                            <button onClick={() => db.collection('nou_rooms').doc(currentRoom.id).delete()} className="text-red-500/50 hover:text-red-500 transition-colors text-xs font-bold uppercase">
+                                取消房間
                             </button>
                         </div>
                     </div>
@@ -142,82 +318,32 @@
                         <p className="text-[10px] tracking-[0.4em] text-gray-500 uppercase mt-4 font-bold">Ultimate Edition V2.0</p>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-10 w-full max-w-6xl">
-                        {/* 左側：連線對戰 (參考 175940.png) */}
-                        <div className="glass rounded-[40px] p-10 relative overflow-hidden flex flex-col h-full">
-                            <div className="flex items-center gap-3 mb-8">
-                                <div className="w-1.5 h-6 bg-blue-500 rounded-full"></div>
-                                <h2 className="text-2xl font-bold italic">連線對戰</h2>
-                                <div className="ml-auto opacity-10">
-                                    <svg width="60" height="60" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
-                                </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-10 w-full max-w-5xl">
+                        <div className="glass rounded-[40px] p-10 flex flex-col">
+                            <h2 className="text-2xl font-bold italic mb-8">連線大廳</h2>
+                            <div className="space-y-6 mb-8">
+                                <input 
+                                    type="text" value={playerName} onChange={e => setPlayerName(e.target.value)}
+                                    className="w-full bg-black/40 border border-white/10 rounded-2xl px-6 py-4 focus:border-blue-500/50 outline-none font-bold"
+                                />
+                                <button onClick={createRoom} className="w-full bg-blue-600 py-4 rounded-2xl font-black italic">建立新房間 +</button>
                             </div>
-
-                            <div className="space-y-6 mb-10">
-                                <div>
-                                    <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest block mb-3">Player Identity</label>
-                                    <input 
-                                        type="text" 
-                                        value={playerName}
-                                        onChange={(e) => setPlayerName(e.target.value)}
-                                        className="w-full bg-black/40 border border-white/10 rounded-2xl px-6 py-4 focus:outline-none focus:border-blue-500/50 transition-all font-bold"
-                                    />
-                                </div>
-                                <button onClick={createRoom} className="w-full btn-blue py-5 rounded-2xl font-black italic tracking-wider transition-transform active:scale-95">
-                                    建立新房間 +
-                                </button>
-                            </div>
-
-                            <div className="flex-1">
-                                <div className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-4">公開大廳</div>
-                                <div className="space-y-3">
-                                    {loading ? (
-                                        <div className="py-10 text-center opacity-30 italic">讀取中...</div>
-                                    ) : rooms.length === 0 ? (
-                                        <div className="py-10 text-center text-sm opacity-30 italic font-bold">目前大廳暫無公開房間</div>
-                                    ) : (
-                                        rooms.map(r => (
-                                            <div key={r.id} className="flex items-center justify-between bg-white/5 border border-white/5 p-5 rounded-2xl">
-                                                <div>
-                                                    <div className="font-bold">{r.name}</div>
-                                                    <div className="text-[10px] text-gray-500 uppercase">Host: {r.host} • {r.players.length}/4</div>
-                                                </div>
-                                                <button onClick={() => joinRoom(r)} className="px-6 py-2 btn-blue rounded-xl text-sm font-bold italic">加入</button>
-                                            </div>
-                                        ))
-                                    )}
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* 右側：單機練習 (參考 175940.png) */}
-                        <div className="glass rounded-[40px] p-10 flex flex-col items-center justify-center relative opacity-50">
-                             <div className="absolute top-10 left-10 flex items-center gap-3">
-                                <div className="w-1.5 h-6 bg-purple-500 rounded-full"></div>
-                                <h2 className="text-2xl font-bold italic">單機練習</h2>
-                            </div>
-                            
-                            <div className="flex bg-black/40 p-1 rounded-2xl mb-12 w-full max-w-xs">
-                                {['簡單', '普通', '困難'].map(lv => (
-                                    <button key={lv} className={`flex-1 py-3 rounded-xl text-xs font-bold ${lv==='普通'?'bg-purple-600 shadow-lg shadow-purple-500/30':'text-gray-600'}`}>{lv}</button>
+                            <div className="flex-1 overflow-y-auto max-h-64 space-y-3">
+                                {rooms.filter(r => r.status === 'LOBBY').map(r => (
+                                    <div key={r.id} className="flex items-center justify-between bg-white/5 border border-white/5 p-4 rounded-2xl">
+                                        <div><div className="font-bold">{r.name}</div><div className="text-[10px] opacity-40">{r.players.length}/4 玩家</div></div>
+                                        <button onClick={() => joinRoom(r)} className="px-5 py-2 bg-blue-500 rounded-xl text-xs font-bold">加入</button>
+                                    </div>
                                 ))}
                             </div>
+                        </div>
 
-                            <div className="w-full space-y-4">
-                                <button className="w-full bg-white/5 border border-white/10 py-6 rounded-3xl font-black italic flex items-center justify-center gap-2">
-                                    1 VS 1 ⚡
-                                </button>
-                                <button className="w-full btn-purple py-6 rounded-3xl font-black italic">
-                                    1 VS 3 亂鬥
-                                </button>
-                            </div>
-                            <div className="text-[10px] text-gray-700 font-bold uppercase tracking-widest mt-6">AI Powered Opponents</div>
+                        <div className="glass rounded-[40px] p-10 flex flex-col items-center justify-center opacity-40 grayscale">
+                            <h2 className="text-2xl font-bold italic mb-6">單機練習</h2>
+                            <p className="text-sm italic text-gray-500 mb-8 text-center">單機 AI 模式正在開發中，請先使用連線對戰。</p>
+                            <div className="w-full h-32 border-2 border-dashed border-white/10 rounded-3xl"></div>
                         </div>
                     </div>
-
-                    <footer className="mt-20 text-[10px] font-bold text-gray-700 tracking-[0.3em] uppercase">
-                        Designed for GitHub & Vercel Deployment
-                    </footer>
                 </div>
             );
         }
